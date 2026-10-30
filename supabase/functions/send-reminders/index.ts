@@ -63,7 +63,11 @@ async function send(subs: Sub[], payload: object) {
   }
 }
 
+// The app calls the test endpoint from the browser, which needs these headers
+const CORS = { "Access-Control-Allow-Origin": "https://jamieh06.github.io", "Access-Control-Allow-Headers": "authorization, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
+
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   const { data: secrets } = await db.from("app_secrets").select("name,value");
   const sec = Object.fromEntries((secrets || []).map((r: any) => [r.name, r.value]));
   webpush.setVapidDetails(APP_URL, sec.vapid_public, sec.vapid_private);
@@ -73,10 +77,10 @@ Deno.serve(async (req) => {
   if (body.test) {
     const token = (req.headers.get("Authorization") || "").replace("Bearer ", "");
     const { data } = await db.auth.getUser(token);
-    if (!data?.user) return new Response("Not signed in", { status: 401 });
+    if (!data?.user) return new Response("Not signed in", { status: 401, headers: CORS });
     const { data: subs } = await db.from("push_subs").select("*").eq("user_id", data.user.id);
     await send(subs || [], { title: "Planner", body: "Notifications are working.", tag: "test" });
-    return Response.json({ sent: (subs || []).length });
+    return Response.json({ sent: (subs || []).length }, { headers: CORS });
   }
 
   if (req.headers.get("x-cron-secret") !== sec.cron_secret) return new Response("Forbidden", { status: 403 });
