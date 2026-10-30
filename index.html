@@ -439,12 +439,36 @@ const KEY = 'planner.v1', VIEW_KEY = 'planner.view';
 const CALS = { uni: 'Uni', study: 'Study', life: 'Life', health: 'Health', project: 'Projects' };
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+// Everything that comes in (storage, a backup file, the sync) is checked field by field before use,
+// so a tampered value can never reach the page's HTML.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const num = (v, lo, hi, d) => Number.isFinite(+v) && v !== '' && v !== null ? Math.min(hi, Math.max(lo, +v)) : d;
+const str = (v, n) => String(v ?? '').slice(0, n);
+function cleanEvent(x) {
+  if (!x || !ID_RE.test(x.id) || !DATE_RE.test(x.date)) return null;
+  const s = num(x.s, 0, 23.75, 9), e = num(x.e, s + .25, 24, Math.min(24, s + 1));
+  return { id: x.id, title: str(x.title, 200), cal: CALS[x.cal] ? x.cal : 'uni', date: x.date, s, e,
+    repeat: x.repeat === 'weekly' ? 'weekly' : 'none', until: DATE_RE.test(x.until) ? x.until : '',
+    skip: Array.isArray(x.skip) ? x.skip.filter(d => DATE_RE.test(d)) : [],
+    where: str(x.where, 200), notes: str(x.notes, 5000), u: num(x.u, 0, 1e14, 0) };
+}
+function cleanTask(x) {
+  if (!x || !ID_RE.test(x.id)) return null;
+  return { id: x.id, title: str(x.title, 200), cal: CALS[x.cal] ? x.cal : 'uni', due: DATE_RE.test(x.due) ? x.due : '',
+    done: x.done === true, notes: str(x.notes, 5000), u: num(x.u, 0, 1e14, 0) };
+}
+function cleanDb(d) {
+  d = d && typeof d === 'object' ? d : {};
+  return {
+    events: (Array.isArray(d.events) ? d.events : []).map(cleanEvent).filter(Boolean),
+    tasks: (Array.isArray(d.tasks) ? d.tasks : []).map(cleanTask).filter(Boolean),
+    hidden: (Array.isArray(d.hidden) ? d.hidden : []).filter(k => CALS[k]),
+    deleted: Object.fromEntries(Object.entries(d.deleted && typeof d.deleted === 'object' ? d.deleted : {}).filter(([k, v]) => ID_RE.test(k) && Number.isFinite(v))),
+  };
+}
 function load() {
-  try {
-    const d = JSON.parse(localStorage.getItem(KEY));
-    if (d && Array.isArray(d.events)) return { events: d.events, tasks: d.tasks || [], hidden: d.hidden || [], deleted: d.deleted || {} };
-  } catch {}
-  return { events: [], tasks: [], hidden: [], deleted: {} };
+  try { const d = JSON.parse(localStorage.getItem(KEY)); if (d) return cleanDb(d); } catch {}
+  return cleanDb({});
 }
 // Sync support: every item carries u (last changed, ms) and deletions leave a tombstone in db.deleted,
 // so two devices can merge item by item instead of one overwriting the other.
@@ -938,7 +962,7 @@ $('importFile').addEventListener('change', async e => {
     if (!Array.isArray(d.events)) throw 0;
     if (!confirm(`Replace everything with this backup (${plural(d.events.length, 'event')}, ${plural((d.tasks || []).length, 'task')})?`)) return;
     const snap = JSON.stringify(db);
-    db = { events: d.events, tasks: d.tasks || [], hidden: d.hidden || [], deleted: db.deleted }; save(); render();
+    db = { ...cleanDb(d), hidden: db.hidden, deleted: db.deleted }; save(); render();
     toast('Backup imported', () => { restore(snap); });
   } catch { toast("That file isn't a Planner backup"); }
 });
@@ -1004,7 +1028,7 @@ async function sync() {
   try {
     await ensureToken();
     const rows = await api('GET', '/rest/v1/planner?select=doc');
-    const remote = rows && rows[0] ? rows[0].doc : null;
+    const remote = rows && rows[0] ? cleanDb(rows[0].doc) : null;
     const before = stable(docOf(db));
     if (remote) { db = merge(db, remote); snapshotItems(); saveLocal(); }
     const out = stable(docOf(db));
