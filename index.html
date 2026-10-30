@@ -238,6 +238,8 @@ dialog { border: 0; padding: 0; background: none; color: inherit; max-width: non
 .cal-pick { display: flex; flex-wrap: wrap; gap: 6px; }
 .cal-pick button { display: flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px; font-size: 13.5px; border: 1px solid var(--glass-border); background: rgba(10, 6, 25, .45); color: var(--ink-2); transition: background-color 150ms ease, border-color 150ms ease, transform 140ms var(--ease-out); }
 .cal-pick button:active { transform: scale(.95); }
+.chips { --c: var(--accent); }
+.chips .x { margin-left: 2px; opacity: .6; }
 .cal-pick button[aria-pressed="true"] { border-color: var(--c); background: color-mix(in srgb, var(--c) 22%, transparent); color: var(--ink); }
 .ed-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 4px; }
 .ed-foot .spacer { flex: 1; }
@@ -412,9 +414,14 @@ dialog { border: 0; padding: 0; background: none; color: inherit; max-width: non
           <label class="frow" id="untilRow">Until<input type="date" class="field" id="fUntil"></label>
         </div>
         <label class="frow">Where<input class="field" id="fWhere" placeholder="Optional" autocomplete="off"></label>
+        <div class="frow">Remind me<div class="cal-pick chips" id="fRemind" role="group" aria-label="Remind me before"></div></div>
       </div>
     </div>
-    <label class="frow task-only">Due<input type="date" class="field" id="fDue"></label>
+    <div class="task-only" style="display:flex;flex-direction:column;gap:12px">
+      <label class="frow">Due<input type="date" class="field" id="fDue"></label>
+      <div class="frow">Remind me at<div class="cal-pick chips" id="fRemindList"></div>
+        <div class="grid2" style="grid-template-columns:1fr auto"><input type="datetime-local" class="field" id="fRemindAt" aria-label="Reminder time"><button type="button" class="ghost" id="fAddRemind">Add</button></div></div>
+    </div>
     <label class="frow">Notes<textarea class="field" id="fNotes" rows="2" placeholder="Optional"></textarea></label>
     <div class="ed-foot">
       <button type="button" class="ghost danger" id="fDel">Delete</button>
@@ -441,7 +448,7 @@ const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 // Everything that comes in (storage, a backup file, the sync) is checked field by field before use,
 // so a tampered value can never reach the page's HTML.
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, ID_RE = /^[A-Za-z0-9_-]{1,40}$/, REMIND_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const num = (v, lo, hi, d) => Number.isFinite(+v) && v !== '' && v !== null ? Math.min(hi, Math.max(lo, +v)) : d;
 const str = (v, n) => String(v ?? '').slice(0, n);
 function cleanEvent(x) {
@@ -450,12 +457,14 @@ function cleanEvent(x) {
   return { id: x.id, title: str(x.title, 200), cal: CALS[x.cal] ? x.cal : 'uni', date: x.date, s, e,
     repeat: x.repeat === 'weekly' ? 'weekly' : 'none', until: DATE_RE.test(x.until) ? x.until : '',
     skip: Array.isArray(x.skip) ? x.skip.filter(d => DATE_RE.test(d)) : [],
-    where: str(x.where, 200), notes: str(x.notes, 5000), u: num(x.u, 0, 1e14, 0) };
+    where: str(x.where, 200), notes: str(x.notes, 5000), u: num(x.u, 0, 1e14, 0),
+    remind: Array.isArray(x.remind) ? [...new Set(x.remind.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 40320))].sort((a, b) => a - b).slice(0, 10) : [] };
 }
 function cleanTask(x) {
   if (!x || !ID_RE.test(x.id)) return null;
   return { id: x.id, title: str(x.title, 200), cal: CALS[x.cal] ? x.cal : 'uni', due: DATE_RE.test(x.due) ? x.due : '',
-    done: x.done === true, notes: str(x.notes, 5000), u: num(x.u, 0, 1e14, 0) };
+    done: x.done === true, notes: str(x.notes, 5000), u: num(x.u, 0, 1e14, 0),
+    remind: Array.isArray(x.remind) ? [...new Set(x.remind.filter(t => REMIND_AT_RE.test(t)))].sort().slice(0, 10) : [] };
 }
 function cleanDb(d) {
   d = d && typeof d === 'object' ? d : {};
@@ -756,6 +765,17 @@ function setKind(kind) {
   ed.querySelector('.task-only').hidden = kind !== 'task';
   $('edHeading').textContent = (edit.id ? 'Edit ' : 'New ') + kind;
 }
+const REMIND_PRESETS = [0, 5, 10, 15, 30, 60, 1440];
+const remindLabel = m => m === 0 ? 'At start' : m < 60 ? `${m} min` : m % 1440 === 0 ? `${m / 1440} day${m === 1440 ? '' : 's'}` : m % 60 === 0 ? `${m / 60} h` : `${Math.floor(m / 60)} h ${m % 60} min`;
+const atLabel = t => `${parse(t.slice(0, 10)).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}, ${t.slice(11)}`;
+function renderRemind(selected) {
+  $('fRemind').innerHTML = [...new Set([...REMIND_PRESETS, ...selected])].sort((a, b) => a - b)
+    .map(m => `<button type="button" data-remind="${m}" aria-pressed="${selected.includes(m)}">${remindLabel(m)}</button>`).join('');
+}
+function renderRemindList() {
+  $('fRemindList').innerHTML = edit.taskRemind.map(t => `<button type="button" data-rm-at="${t}" aria-pressed="true" aria-label="Remove reminder ${atLabel(t)}">${atLabel(t)}<span class="x">×</span></button>`).join('')
+    || '<span class="none-msg" style="padding:0;text-transform:none;letter-spacing:0;font-weight:400">No reminders</span>';
+}
 function syncUntil() { $('untilRow').style.visibility = $('fRepeat').value === 'weekly' ? 'visible' : 'hidden'; }
 
 function openEditor({ kind, id = null, date, s, e, due = '' }) {
@@ -775,6 +795,10 @@ function openEditor({ kind, id = null, date, s, e, due = '' }) {
   } else {
     $('fDue').value = item ? item.due || '' : due;
   }
+  renderRemind(item && kind === 'event' ? item.remind || [] : []);
+  edit.taskRemind = item && kind === 'task' ? [...(item.remind || [])] : [];
+  renderRemindList();
+  $('fRemindAt').value = '';
   // Fill both sides so switching Event/Task keeps sensible values
   if (!id) {
     $('fDate').value = date; $('fStart').value = fmt(s); $('fEnd').value = fmt(e);
@@ -816,17 +840,19 @@ $('edForm').addEventListener('submit', e => {
     let s = fromHM($('fStart').value || '09:00'), en = fromHM($('fEnd').value || '10:00');
     if (en <= s) en = en === 0 ? 24 : Math.min(24, s + 1);
     const repeat = $('fRepeat').value, until = repeat === 'weekly' ? $('fUntil').value : '', where = $('fWhere').value.trim();
+    const remind = [...ed.querySelectorAll('#fRemind [aria-pressed="true"]')].map(b => +b.dataset.remind);
     const ev = edit.id && db.events.find(x => x.id === edit.id);
     if (ev) {
       // Editing one occurrence of a series shifts the whole series by the same number of days
       const shift = diffDays(edit.date, date);
-      Object.assign(ev, { title, cal, s, e: en, repeat, until, where, notes, date: ymd(addDays(parse(ev.date), shift)) });
-    } else db.events.push({ id: uid(), title, cal, date, s, e: en, repeat, until, skip: [], where, notes });
+      Object.assign(ev, { title, cal, s, e: en, repeat, until, where, notes, remind, date: ymd(addDays(parse(ev.date), shift)) });
+    } else db.events.push({ id: uid(), title, cal, date, s, e: en, repeat, until, skip: [], where, notes, remind });
     cursor = parse(date);
   } else {
     const due = $('fDue').value, t = edit.id && db.tasks.find(x => x.id === edit.id);
-    if (t) Object.assign(t, { title, cal, due, notes });
-    else db.tasks.push({ id: uid(), title, cal, due, done: false, notes });
+    const remind = [...edit.taskRemind].sort();
+    if (t) Object.assign(t, { title, cal, due, notes, remind });
+    else db.tasks.push({ id: uid(), title, cal, due, done: false, notes, remind });
   }
   save(); closeEditor(); render();
 });
@@ -837,6 +863,13 @@ ed.addEventListener('click', e => {
   const k = e.target.closest('[data-kind]'); if (k) setKind(k.dataset.kind);
   const c = e.target.closest('[data-cal]'); if (c) ed.querySelectorAll('#fCal button').forEach(b => b.setAttribute('aria-pressed', b === c));
   const d = e.target.closest('[data-del]'); if (d) removeItem(d.dataset.del);
+  const r = e.target.closest('[data-remind]'); if (r) r.setAttribute('aria-pressed', r.getAttribute('aria-pressed') !== 'true');
+  const x = e.target.closest('[data-rm-at]'); if (x) { edit.taskRemind = edit.taskRemind.filter(t => t !== x.dataset.rmAt); renderRemindList(); }
+  if (e.target.closest('#fAddRemind')) {
+    const v = $('fRemindAt').value.slice(0, 16);
+    if (REMIND_AT_RE.test(v) && !edit.taskRemind.includes(v)) { edit.taskRemind.push(v); edit.taskRemind.sort(); renderRemindList(); }
+    $('fRemindAt').value = '';
+  }
 });
 $('fRepeat').addEventListener('change', syncUntil);
 $('fDel').addEventListener('click', () => {
@@ -1000,6 +1033,7 @@ async function api(method, path, body, auth = true) {
   const headers = { apikey: SUPABASE_KEY, 'Content-Type': 'application/json' };
   if (auth) headers.Authorization = `Bearer ${session.access_token}`;
   if (method === 'POST' && path.startsWith('/rest')) headers.Prefer = 'resolution=merge-duplicates,return=minimal';
+  if (method === 'PATCH') headers.Prefer = 'return=representation';
   const r = await fetch(SUPABASE_URL + path, { method, headers, body: body && JSON.stringify(body) });
   const text = await r.text();
   let data = null; try { data = text ? JSON.parse(text) : null; } catch {}
@@ -1027,13 +1061,16 @@ async function sync() {
   syncing = true; setSync('busy');
   try {
     await ensureToken();
-    const rows = await api('GET', '/rest/v1/planner?select=doc');
+    const rows = await api('GET', '/rest/v1/planner?select=doc,updated_at');
     const remote = rows && rows[0] ? cleanDb(rows[0].doc) : null;
     const before = stable(docOf(db));
     if (remote) { db = merge(db, remote); snapshotItems(); saveLocal(); }
     const out = stable(docOf(db));
-    if (!remote || out !== stable(docOf(remote)))
-      await api('POST', '/rest/v1/planner', { user_id: session.id, doc: docOf(db), updated_at: new Date().toISOString() });
+    if (!remote) await api('POST', '/rest/v1/planner', { user_id: session.id, doc: docOf(db), updated_at: new Date().toISOString() });
+    else if (out !== stable(docOf(remote))) {
+      const written = await api('PATCH', `/rest/v1/planner?user_id=eq.${session.id}&updated_at=eq.${encodeURIComponent(rows[0].updated_at)}`, { doc: docOf(db), updated_at: new Date().toISOString() });
+      if (!written || !written.length) syncAgain = true; // changed meanwhile: merge again rather than overwrite
+    }
     lastSync = Date.now(); syncErr = ''; setSync('ok');
     if (out !== before && !anyDlg() && !drag) render();
   } catch (e) {
@@ -1071,8 +1108,55 @@ function renderAcct() {
   } else {
     body.innerHTML = `${top}<p>Signed in as <strong>${esc(session.email)}</strong></p>
       <p class="msg">${SYNC_LABEL[syncState]}${syncState === 'error' && syncErr ? `: ${esc(syncErr)}` : ''} · last synced ${ago(lastSync)}</p>
-      <div class="row"><button type="button" class="ghost danger" data-acct="signout">Sign out</button><button type="button" class="btn" data-acct="sync">Sync now</button></div>`;
+      <div class="row"><button type="button" class="ghost danger" data-acct="signout">Sign out</button><button type="button" class="btn" data-acct="sync">Sync now</button></div>
+      <h2 class="serif" style="margin:8px 0 0;font-size:22px">Notifications</h2><div class="stack" id="notifBox"><p class="msg">Checking…</p></div>`;
+    renderNotif();
   }
+}
+
+// ---------- Notifications (web push) ----------
+const VAPID_PUBLIC = 'BOMT2DG071kPYLqSgTpjWV1Q0IAaJ7puhYPnK31mZvXbclDLI6hEA2otZDIlvb7Bq-8_Gq9LvKa0B_RsIHBr2QU';
+const b64ToBytes = b => { const s = atob((b + '='.repeat((4 - b.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, c => c.charCodeAt(0)); };
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+async function currentSub() { const reg = await navigator.serviceWorker.getRegistration(); return reg && reg.pushManager.getSubscription(); }
+async function renderNotif() {
+  const box = $('notifBox'); if (!box) return;
+  const set = html => { if ($('notifBox')) $('notifBox').innerHTML = html; };
+  if (!pushSupported()) return set(`<p class="msg">${isIOS ? 'On iPhone, notifications only work when Planner is opened from your Home Screen.' : "This browser can't show notifications."}</p>`);
+  if (Notification.permission === 'denied') return set(`<p class="msg">Notifications are blocked for Planner. Allow them in ${isIOS ? 'Settings → Notifications → Planner' : 'your browser or system settings'}, then come back.</p>`);
+  const sub = await currentSub().catch(() => null);
+  set(sub
+    ? `<p class="msg">On for this device. You'll get the reminders you set and an 8am summary of your day.</p>
+       <div class="row"><button type="button" class="ghost" data-acct="push-off">Turn off</button><button type="button" class="btn" data-acct="push-test">Send a test</button></div>`
+    : `<p class="msg">Get your reminders and an 8am summary of your day on this device.</p>
+       <div class="row"><button type="button" class="btn" data-acct="push-on">Turn on notifications</button></div>`);
+}
+const notifMsg = m => { const box = $('notifBox'); if (box) box.insertAdjacentHTML('afterbegin', `<p class="msg">${esc(m)}</p>`); };
+async function pushOn() {
+  try {
+    if (await Notification.requestPermission() !== 'granted') return renderNotif();
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) });
+    const j = sub.toJSON();
+    await ensureToken();
+    await api('POST', '/rest/v1/push_subs', { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London', user_id: session.id });
+    await renderNotif(); notifMsg('Turned on.');
+  } catch (e) { await renderNotif(); notifMsg(`Couldn't turn on: ${e.message}`); }
+}
+async function pushOff() {
+  try {
+    const sub = await currentSub();
+    if (sub) { await ensureToken(); await api('DELETE', `/rest/v1/push_subs?endpoint=eq.${encodeURIComponent(sub.endpoint)}`); await sub.unsubscribe(); }
+  } catch (e) { notifMsg(`Couldn't turn off: ${e.message}`); }
+  renderNotif();
+}
+async function pushTest() {
+  try {
+    await ensureToken();
+    const r = await api('POST', '/functions/v1/send-reminders', { test: true });
+    notifMsg(r && r.sent ? 'Test sent. It should arrive in a few seconds.' : 'No devices are turned on yet.');
+  } catch (e) { notifMsg(`Couldn't send: ${e.message}`); }
 }
 function openAcct() { renderAcct(); showDlg(acct); }
 const acctMsg = m => { const el = $('acctMsg'); if (el) el.textContent = m; };
@@ -1100,6 +1184,9 @@ acct.addEventListener('click', e => {
   else if (a === 'signup') authWith('signup');
   else if (a === 'signout') { signOut(); renderAcct(); toast('Signed out. Your planner stays on this device.'); }
   else if (a === 'sync') sync();
+  else if (a === 'push-on') pushOn();
+  else if (a === 'push-off') pushOff();
+  else if (a === 'push-test') pushTest();
 });
 acct.addEventListener('cancel', e => { e.preventDefault(); hideDlg(acct); });
 
