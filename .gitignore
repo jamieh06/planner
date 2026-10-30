@@ -1,0 +1,6 @@
+# Only the app itself is published. Notes and setup files stay on this Mac.
+PLAN.md
+mock.html
+setup.sql
+.claude/
+.DS_Store
