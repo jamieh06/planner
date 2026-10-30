@@ -10,6 +10,12 @@ const SUMMARY_MIN = 8 * 60;   // 08:00 local
 const WINDOW = 10;            // minutes of grace if a run is late; the sent-log stops repeats
 
 type Sub = { endpoint: string; user_id: string; p256dh: string; auth: string; tz: string };
+// Only real browser push services; anything else in push_subs is ignored
+const PUSH_HOSTS = ["web.push.apple.com", "fcm.googleapis.com", "updates.push.services.mozilla.com", "push.services.mozilla.com", "notify.windows.com"];
+const okEndpoint = (e: string) => { try { const u = new URL(e); return u.protocol === "https:" && PUSH_HOSTS.some((h) => u.hostname === h || u.hostname.endsWith("." + h)); } catch { return false; } };
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const validTz = (tz: string) => { try { new Intl.DateTimeFormat("en-GB", { timeZone: tz }); return true; } catch { return false; } };
+const hours = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 24;
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const pad = (n: number) => String(n).padStart(2, "0");
 const hm = (h: number) => h >= 24 ? "00:00" : `${pad(Math.floor(h))}:${pad(Math.round((h % 1) * 60))}`;
@@ -47,8 +53,9 @@ async function claim(key: string) {
 
 async function send(subs: Sub[], payload: object) {
   for (const s of subs) {
+    if (!okEndpoint(s.endpoint)) continue;
     try {
-      await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload), { TTL: 3600 });
+      await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, JSON.stringify(payload), { TTL: 3600, timeout: 8000 });
     } catch (e: any) {
       if (e?.statusCode === 404 || e?.statusCode === 410) await db.from("push_subs").delete().eq("endpoint", s.endpoint);
       else console.error("push failed", e?.statusCode, e?.body);
@@ -80,21 +87,25 @@ Deno.serve(async (req) => {
   ]);
   let sent = 0;
   for (const row of rows || []) {
-    const subs = (allSubs || []).filter((s: Sub) => s.user_id === row.user_id);
+   try {
+    const subs = (allSubs || []).filter((s: Sub) => s.user_id === row.user_id && okEndpoint(s.endpoint));
     if (!subs.length) continue;
-    const now = localNow(subs[0].tz || "Europe/London");
+    const now = localNow(validTz(subs[0].tz) ? subs[0].tz : "Europe/London");
+    const uid = row.user_id;
     const nowAbs = now.day * 1440 + now.min;
     const due = (fireAbs: number) => fireAbs <= nowAbs && fireAbs > nowAbs - WINDOW;
-    const events = row.doc?.events || [], tasks = row.doc?.tasks || [];
+    // Only well-formed items are used, so one bad entry can't break a run
+    const events = (Array.isArray(row.doc?.events) ? row.doc.events : []).filter((ev: any) => ev && ID_RE.test(ev.id) && DATE_RE.test(ev.date) && hours(ev.s) && hours(ev.e) && (!ev.until || DATE_RE.test(ev.until)));
+    const tasks = (Array.isArray(row.doc?.tasks) ? row.doc.tasks : []).filter((t: any) => t && ID_RE.test(t.id) && (!t.due || DATE_RE.test(t.due)));
 
     // Event reminders: look ahead far enough to cover "a week before" style reminders
     for (const ev of events) {
-      const reminds: number[] = Array.isArray(ev.remind) ? ev.remind : [];
+      const reminds: number[] = Array.isArray(ev.remind) ? ev.remind.filter((m: unknown) => Number.isInteger(m) && (m as number) >= 0 && (m as number) <= 40320) : [];
       if (!reminds.length) continue;
       for (const d of occurrences(ev, now.day - 1, now.day + 8)) {
         for (const m of reminds) {
           if (!due(d * 1440 + Math.round(ev.s * 60) - m)) continue;
-          if (!(await claim(`ev:${ev.id}:${dateOf(d)}:${m}`))) continue;
+          if (!(await claim(`${uid}:ev:${ev.id}:${dateOf(d)}:${m}`))) continue;
           await send(subs, { title: ev.title, body: `${leadText(m, ev, d)} · ${hm(ev.s)}–${hm(ev.e)}${ev.where ? ` · ${ev.where}` : ""}`, tag: `ev-${ev.id}-${dateOf(d)}` });
           sent++;
         }
@@ -105,8 +116,9 @@ Deno.serve(async (req) => {
     for (const t of tasks) {
       if (t.done || !Array.isArray(t.remind)) continue;
       for (const at of t.remind) {
+        if (typeof at !== "string" || !AT_RE.test(at)) continue;
         const fire = dayNum(at.slice(0, 10)) * 1440 + +at.slice(11, 13) * 60 + +at.slice(14, 16);
-        if (!due(fire) || !(await claim(`task:${t.id}:${at}`))) continue;
+        if (!due(fire) || !(await claim(`${uid}:task:${t.id}:${at}`))) continue;
         await send(subs, { title: t.title, body: t.due ? `Due ${t.due === now.date ? "today" : t.due}` : "Reminder", tag: `task-${t.id}` });
         sent++;
       }
@@ -117,13 +129,16 @@ Deno.serve(async (req) => {
       const today = events.flatMap((ev: any) => occurrences(ev, now.day, now.day).length ? [ev] : []).sort((a: any, b: any) => a.s - b.s);
       const dueToday = tasks.filter((t: any) => !t.done && t.due === now.date);
       const overdue = tasks.filter((t: any) => !t.done && t.due && t.due < now.date).length;
-      if ((today.length || dueToday.length || overdue) && await claim(`daily:${row.user_id}:${now.date}`)) {
+      if ((today.length || dueToday.length || overdue) && await claim(`${uid}:daily:${now.date}`)) {
         const lines = [...today.map((ev: any) => `${hm(ev.s)} ${ev.title}`), ...dueToday.map((t: any) => `Due: ${t.title}`)];
         if (overdue) lines.push(`${overdue} overdue`);
         await send(subs, { title: `Today · ${today.length} event${today.length === 1 ? "" : "s"}`, body: lines.join("\n"), tag: `daily-${now.date}` });
         sent++;
       }
     }
+   } catch (e) {
+    console.error("reminders failed for one user", e);
+   }
   }
 
   // Tidy the sent-log once an hour
