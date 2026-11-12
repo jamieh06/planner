@@ -46,6 +46,7 @@ html { -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%;
 html, body { margin: 0; }
 body { background: var(--paper); color: var(--ink); font: 400 15px/1.45 Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; min-height: 100dvh; }
 button, input, select, textarea { font: inherit; color: inherit; }
+a.icon-btn, .tabbar a { color: inherit; text-decoration: none; }   /* the Home links */
 button { cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 [hidden] { display: none !important; }
@@ -314,9 +315,9 @@ dialog { border: 0; padding: 0; background: none; color: inherit; max-width: non
   .head .eyebrow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .head h1 { font-size: clamp(30px, 9.5vw, 44px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 4px; }
 
-  .tabbar { position: fixed; left: 12px; right: 12px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 10; border-radius: 22px; padding: 6px; display: grid; grid-template-columns: repeat(4, 1fr); }
-  .tabbar button { border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 0; border-radius: 16px; font-size: 11px; font-weight: 500; color: var(--ink-3); transition: transform 140ms var(--ease-out), background-color 200ms ease, color 200ms ease; }
-  .tabbar button:active { transform: scale(.94); }
+  .tabbar { position: fixed; left: 12px; right: 12px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 10; border-radius: 22px; padding: 6px; display: grid; grid-template-columns: repeat(5, 1fr); }
+  .tabbar button, .tabbar a { border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 0; border-radius: 16px; font-size: 11px; font-weight: 500; color: var(--ink-3); transition: transform 140ms var(--ease-out), background-color 200ms ease, color 200ms ease; }
+  .tabbar button:active, .tabbar a:active { transform: scale(.94); }
   .tabbar svg { width: 22px; height: 22px; }
   .tabbar [aria-current="page"] { color: var(--ink); background: rgba(255, 255, 255, .09); }
   .fab { position: fixed; right: 20px; bottom: calc(94px + env(safe-area-inset-bottom, 0px)); z-index: 11; width: 56px; height: 56px; border-radius: 50%; border: 0;
@@ -372,6 +373,7 @@ dialog { border: 0; padding: 0; background: none; color: inherit; max-width: non
         <p class="sub" id="sub"></p>
       </div>
       <div class="tools">
+        <a class="icon-btn desk-only" href="../home/" aria-label="Home" title="Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3.5" width="6" height="6" rx="1.6"/><rect x="13" y="3.5" width="6" height="6" rx="1.6"/><rect x="5" y="11.5" width="6" height="6" rx="1.6"/><rect x="13" y="11.5" width="6" height="6" rx="1.6"/><path d="M8.5 21h7"/></svg></a>
         <button class="icon-btn sync-btn" id="syncBtn" data-state="off" aria-label="Sync" title="Sync"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18h10.5a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.3 9.1 4.5 4.5 0 0 0 7 18Z"/></svg></button>
         <div class="seg desk-only" role="group" aria-label="View">
           <button data-view="day">Day</button><button data-view="week">Week</button><button data-view="month">Month</button><button data-view="tasks">Tasks</button>
@@ -387,6 +389,7 @@ dialog { border: 0; padding: 0; background: none; color: inherit; max-width: non
 </div>
 
 <nav class="tabbar glass" aria-label="Views">
+  <a href="../home/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3.5" width="6" height="6" rx="1.6"/><rect x="13" y="3.5" width="6" height="6" rx="1.6"/><rect x="5" y="11.5" width="6" height="6" rx="1.6"/><rect x="13" y="11.5" width="6" height="6" rx="1.6"/><path d="M8.5 21h7"/></svg>Home</a>
   <button data-view="day"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16"/><circle cx="12" cy="15" r="1.6" fill="currentColor"/></svg>Day</button>
   <button data-view="week"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9.3 10v10M14.7 10v10"/></svg>Week</button>
   <button data-view="month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M4 15h16M9.3 10v10M14.7 10v10"/></svg>Month</button>
