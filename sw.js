@@ -1,7 +1,7 @@
 // Offline support. The page itself is fetched network-first so updates show up straight away,
 // with the cached copy as a fallback when there's no signal. Icons and fonts are cache-first.
 // Supabase requests are never cached: sync always talks to the live database.
-const CACHE = 'planner-v2';
+const CACHE = 'planner-v3';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'];
 
 self.addEventListener('install', e => {
