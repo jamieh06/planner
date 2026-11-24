@@ -2394,8 +2394,10 @@ h2.dt__title:hover { background: none; }
           <label class="ed-row"><span class="ed-row__label">Date</span><input type="date" class="ed-in" id="fDate" required></label>
           <div class="ed-row ed-pair">
             <label><span class="ed-row__label">Starts</span><input type="time" class="ed-in" id="fStart" step="300" required></label>
-            <label><span class="ed-row__label">Ends</span><input type="time" class="ed-in" id="fEnd" step="300" required></label>
+            <label id="endLabel"><span class="ed-row__label">Ends</span><input type="time" class="ed-in" id="fEnd" step="300"></label>
           </div>
+          <div class="ed-row"><span class="ed-row__label">End time</span>
+            <div class="ed-seg" id="fEndSeg" role="group" aria-label="End time"><button type="button" class="ed-seg__btn" data-endmode="set">Set</button><button type="button" class="ed-seg__btn" data-endmode="none">No end</button></div></div>
           <div class="ed-row"><span class="ed-row__label">Repeat</span>
             <input type="hidden" id="fRepeat" value="none">
             <div class="ed-seg" id="fRepeatSeg" role="group" aria-label="Repeat"><button type="button" class="ed-seg__btn" data-rep="none">Never</button><button type="button" class="ed-seg__btn" data-rep="weekly">Every week</button></div></div>
@@ -2508,6 +2510,8 @@ h2.dt__title:hover { background: none; }
 //        tasks:  [{ id, title, cal, due 'YYYY-MM-DD'|'', done, notes }], hidden: [cal keys] }
 const KEY = 'planner.v1', VIEW_KEY = 'planner.view';
 const CALS = { uni: 'Uni', study: 'Study', life: 'Life', health: 'Health', project: 'Projects' };
+// An event with no end time is drawn as half an hour, but only its start is ever shown
+const OPEN_LEN = .5;
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 // Everything that comes in (storage, a backup file, the sync) is checked field by field before use,
@@ -2517,8 +2521,8 @@ const num = (v, lo, hi, d) => Number.isFinite(+v) && v !== '' && v !== null ? Ma
 const str = (v, n) => String(v ?? '').slice(0, n);
 function cleanEvent(x) {
   if (!x || !ID_RE.test(x.id) || !DATE_RE.test(x.date)) return null;
-  const s = num(x.s, 0, 23.75, 9), e = num(x.e, s + .25, 24, Math.min(24, s + 1));
-  return { id: x.id, title: str(x.title, 200), cal: CALS[x.cal] ? x.cal : 'uni', date: x.date, s, e,
+  const s = num(x.s, 0, 23.75, 9), open = x.open === true, e = open ? Math.min(24, s + OPEN_LEN) : num(x.e, s + .25, 24, Math.min(24, s + 1));
+  return { id: x.id, title: str(x.title, 200), cal: CALS[x.cal] ? x.cal : 'uni', date: x.date, s, e, open,
     repeat: x.repeat === 'weekly' ? 'weekly' : 'none', until: DATE_RE.test(x.until) ? x.until : '',
     skip: Array.isArray(x.skip) ? x.skip.filter(d => DATE_RE.test(d)) : [],
     where: str(x.where, 200), notes: str(x.notes, 5000), u: num(x.u, 0, 1e14, 0),
@@ -2605,9 +2609,9 @@ function occ(from, to, all) {
       for (let k = Math.max(0, Math.ceil(diffDays(ev.date, from) / 7)); ; k++) {
         const ds = ymd(addDays(parse(ev.date), k * 7));
         if (ds > to || (ev.until && ds > ev.until)) break;
-        if (!(ev.skip || []).includes(ds)) out.push({ ev, date: ds, s: ev.s, e: ev.e });
+        if (!(ev.skip || []).includes(ds)) out.push({ ev, date: ds, s: ev.s, e: ev.e, open: !!ev.open });
       }
-    } else if (ev.date >= from && ev.date <= to) out.push({ ev, date: ev.date, s: ev.s, e: ev.e });
+    } else if (ev.date >= from && ev.date <= to) out.push({ ev, date: ev.date, s: ev.s, e: ev.e, open: !!ev.open });
   }
   return out.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.s - b.s);
 }
@@ -2659,6 +2663,9 @@ const DOW_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Satur
 const dowOf = d => (d.getDay() + 6) % 7;
 const monthDay = d => `${d.getDate()} ${shortMonth(d)}`;
 const hrs = h => { const w = Math.floor(h), f = h - w; return (w || '') + (f === .25 ? '¼' : f === .5 ? '½' : f === .75 ? '¾' : '') || '0'; };
+const span = (s, e, open) => open ? fmt(s) : `${fmt(s)}–${fmt(e)}`;
+const saySpan = (s, e, open) => open ? `at ${fmt(s)}` : `${fmt(s)} to ${fmt(e)}`;
+const booked = o => o.open ? 0 : o.e - o.s;
 const dur = h => { const m = Math.round(h * 60); return m < 60 ? `${m} min` : m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`; };
 const isoWeek = d => { const x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())), dn = x.getUTCDay() || 7; x.setUTCDate(x.getUTCDate() + 4 - dn); return Math.ceil(((x - Date.UTC(x.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7); };
 let sel = null;   // the event picked in Day's detail column: { id, date }
@@ -2710,10 +2717,10 @@ function dueChip(t) {
 function evBlock(o, p, detail, picked) {
   const t = todayStr(), nh = nowH(), len = o.e - o.s;
   const past = o.date < t || (o.date === t && o.e <= nh), now = o.date === t && o.s <= nh && o.e > nh;
-  const cls = ['ev', len <= .75 && 'is-short', p.n > 1 && `n${Math.min(p.n, 4)}`, past && 'is-past', now && 'is-now', picked && 'is-sel'].filter(Boolean).join(' ');
+  const cls = ['ev', len <= .75 && 'is-short', o.open && 'is-open', p.n > 1 && `n${Math.min(p.n, 4)}`, past && 'is-past', now && 'is-now', picked && 'is-sel'].filter(Boolean).join(' ');
   const e = o.ev, calName = CALS[e.cal];
-  const say = `${e.title}, ${fmt(o.s)} to ${fmt(o.e)}${e.where ? ', ' + e.where : ''}, ${calName}${e.repeat === 'weekly' ? ', repeats weekly' : ''}${now ? ', on now' : ''}`;
-  const extra = detail ? `<span class="ev__meta">${fmt(o.s)}–${fmt(o.e)} · ${dur(len)}</span>` : '';
+  const say = `${e.title}, ${saySpan(o.s, o.e, o.open)}${e.where ? ', ' + e.where : ''}, ${calName}${e.repeat === 'weekly' ? ', repeats weekly' : ''}${now ? ', on now' : ''}`;
+  const extra = detail && !o.open ? `<span class="ev__meta">${fmt(o.s)}–${fmt(o.e)} · ${dur(len)}</span>` : '';
   const where = e.where ? `<span class="ev__where">${I('i-pin')}${esc(e.where)}</span>` : '';
   const foot = detail ? `<span class="ev__foot">${calName}${e.repeat === 'weekly' ? ' · Repeats weekly' : ''}</span>${e.notes ? `<span class="ev__notes">${esc(e.notes)}</span>` : ''}` : '';
   return `<button class="${cls}" type="button" style="--c:var(--c-${e.cal});--s:${o.s};--d:${len};--x:${p.x};--w:${p.w};--n:${p.n};z-index:${p.x + 1}" data-id="${e.id}" data-date="${o.date}" aria-label="${esc(say)}" title="${esc(say)}">
@@ -2766,8 +2773,8 @@ function agendaDay(d, items, tasks) {
   for (const o of evs) {
     if (!nowDone && o.s > nh) { rows += nowRow; nowDone = true; }
     const past = ds < t || (isToday && o.e <= nh), on = isToday && o.s <= nh && o.e > nh, e = o.ev;
-    rows += `<li><button class="arow${past ? ' is-past' : ''}" type="button" style="--c:var(--c-${e.cal})" data-id="${e.id}" data-date="${o.date}" aria-label="${esc(`${e.title}, ${fmt(o.s)} to ${fmt(o.e)}${e.where ? ', ' + e.where : ''}, ${CALS[e.cal]}`)}"><span class="arow__time">${fmt(o.s)}<small>${fmt(o.e)}</small></span><span class="arow__bar" aria-hidden="true"></span>
-      <span class="arow__text"><span class="arow__title">${esc(e.title)}</span><span class="arow__meta">${on ? `<b>Now</b> · until ${fmt(o.e)}` : dur(o.e - o.s)}${e.where ? ' · ' + esc(e.where) : ''}</span></span></button></li>`;
+    rows += `<li><button class="arow${past ? ' is-past' : ''}" type="button" style="--c:var(--c-${e.cal})" data-id="${e.id}" data-date="${o.date}" aria-label="${esc(`${e.title}, ${saySpan(o.s, o.e, o.open)}${e.where ? ', ' + e.where : ''}, ${CALS[e.cal]}`)}"><span class="arow__time">${fmt(o.s)}${o.open ? '' : `<small>${fmt(o.e)}</small>`}</span><span class="arow__bar" aria-hidden="true"></span>
+      <span class="arow__text"><span class="arow__title">${esc(e.title)}</span><span class="arow__meta">${on ? (o.open ? '<b>Now</b>' : `<b>Now</b> · until ${fmt(o.e)}`) : o.open ? 'No end time' : dur(o.e - o.s)}${e.where ? ' · ' + esc(e.where) : ''}</span></span></button></li>`;
   }
   if (evs.length && !nowDone) rows += nowRow;
   const n = diffDays(t, ds), name = n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : n === -1 ? 'Yesterday' : DOW_LONG[dowOf(d)];
@@ -2781,7 +2788,7 @@ function glanceHtml(items) {
   const ws = weekStart(cursor), t = todayStr();
   const per = Array.from({ length: 7 }, (_, i) => {
     const d = addDays(ws, i), ds = ymd(d), by = {}, mine = items.filter(o => o.date === ds);
-    mine.forEach(o => { by[o.ev.cal] = (by[o.ev.cal] || 0) + (o.e - o.s); });
+    mine.forEach(o => { by[o.ev.cal] = (by[o.ev.cal] || 0) + booked(o); });
     return { d, ds, by, n: mine.length, tot: Object.values(by).reduce((a, b) => a + b, 0) };
   });
   const top = Math.max(4, ...per.map(p => p.tot));
@@ -2871,7 +2878,7 @@ function inspInner() {
     const rem = (e.remind || []).map(m => m === 0 ? 'At start' : `${remindLabel(m)} before`).join(', ');
     top = `<div class="insp__card" style="--c:var(--c-${e.cal})"><p class="insp__label">${label}</p><h2 class="insp__title">${esc(e.title)}</h2>
       <p class="insp__cal"><i></i>${CALS[e.cal]}</p>
-      <ul class="insp__facts"><li>${I('i-clock')}<span>${fmt(o.s)}–${fmt(o.e)} · ${dur(o.e - o.s)}</span></li>
+      <ul class="insp__facts"><li>${I('i-clock')}<span>${o.open ? `${fmt(o.s)} · No end time` : `${fmt(o.s)}–${fmt(o.e)} · ${dur(o.e - o.s)}`}</span></li>
         ${e.where ? `<li>${I('i-pin')}<span>${esc(e.where)}</span></li>` : ''}
         ${e.repeat === 'weekly' ? `<li>${I('i-cal')}<span>Every week${e.until ? ' until ' + monthDay(parse(e.until)) : ''}</span></li>` : ''}
         <li${rem ? '' : ' class="is-dim"'}>${I('i-bell')}<span>${rem || 'No reminder'}</span></li></ul>
@@ -3091,9 +3098,9 @@ function renderCC() {
     const when = live ? 'Now' : mins < 90 ? `in ${mins} min` : n === 0 ? `in ${dur(mins / 60)}` : n === 1 ? 'Tomorrow' : DOW[dowOf(parse(nxt.date))];
     tile.className = 'cc-mod rim cc-next'; tile.style.setProperty('--c', `var(--c-${e.cal})`);
     tile.dataset.id = e.id; tile.dataset.date = nxt.date; tile.dataset.ev = '1';
-    tile.setAttribute('aria-label', `Next up: ${e.title}, ${fmt(nxt.s)} to ${fmt(nxt.e)}${e.where ? ', ' + e.where : ''}, ${live ? 'on now' : when}`);
+    tile.setAttribute('aria-label', `Next up: ${e.title}, ${saySpan(nxt.s, nxt.e, nxt.open)}${e.where ? ', ' + e.where : ''}, ${live ? 'on now' : when}`);
     tile.innerHTML = `<div class="cc-next__top"><span class="cc-next__icon" aria-hidden="true">${I(CAL_ICON[e.cal])}</span><span class="cc-next__label">Next Up<b>${when}</b></span></div>
-      <div class="cc-next__title">${esc(e.title)}</div><div class="cc-next__meta num">${n > 1 ? `${DOW[dowOf(parse(nxt.date))]} ${monthDay(parse(nxt.date))}, ` : ''}${fmt(nxt.s)}–${fmt(nxt.e)}</div>${e.where ? `<div class="cc-next__meta">${I('i-pin')}${esc(e.where)}</div>` : ''}`;
+      <div class="cc-next__title">${esc(e.title)}</div><div class="cc-next__meta num">${n > 1 ? `${DOW[dowOf(parse(nxt.date))]} ${monthDay(parse(nxt.date))}, ` : ''}${span(nxt.s, nxt.e, nxt.open)}</div>${e.where ? `<div class="cc-next__meta">${I('i-pin')}${esc(e.where)}</div>` : ''}`;
   } else {
     tile.className = 'cc-mod rim cc-next cc-next--empty'; tile.style.removeProperty('--c'); delete tile.dataset.id; delete tile.dataset.ev; delete tile.dataset.date;
     tile.setAttribute('aria-label', 'Next up: nothing in the next two weeks. New event');
@@ -3114,9 +3121,9 @@ function renderCC() {
   // This Week: hours booked each day, and per calendar
   const ws = view === 'day' || view === 'week' ? weekStart(cursor) : weekStart(new Date()), thisWk = ymd(ws) === ymd(weekStart(new Date()));
   const days = Array.from({ length: 7 }, (_, i) => addDays(ws, i)), items = occ(ymd(ws), ymd(addDays(ws, 6)));
-  const perDay = days.map(d => items.filter(o => o.date === ymd(d)).reduce((s, o) => s + o.e - o.s, 0));
+  const perDay = days.map(d => items.filter(o => o.date === ymd(d)).reduce((s, o) => s + booked(o), 0));
   const total = perDay.reduce((a, b) => a + b, 0), avg = total / 7, top = Math.max(6, Math.ceil(Math.max(...perDay)));
-  const perCal = Object.keys(CALS).map(k => ({ id: k, name: CALS[k], h: items.filter(o => o.ev.cal === k).reduce((s, o) => s + o.e - o.s, 0) }));
+  const perCal = Object.keys(CALS).map(k => ({ id: k, name: CALS[k], h: items.filter(o => o.ev.cal === k).reduce((s, o) => s + booked(o), 0) }));
   const said = days.map((d, i) => `${DOW_LONG[i]} ${dur(perDay[i])}`).join(', ');
   const wkName = thisWk ? 'This Week' : `${monthDay(ws)} – ${monthDay(addDays(ws, 6))}`;
   $('ccWeek').innerHTML = `<div class="cc-wide__head"><h2 class="cc-wide__title" id="cc-week-h">${wkName}</h2><span class="cc-wide__aside">${total ? `<b>${hrs(total)} h</b> booked` : 'Nothing booked'}</span></div>
@@ -3257,6 +3264,11 @@ function renderRemindList() {
   $('fRemindList').innerHTML = edit.taskRemind.map(t => `<button type="button" class="dt-pill" data-rm-at="${t}" aria-pressed="true" aria-label="Remove reminder ${atLabel(t)}">${atLabel(t)}<span class="x" aria-hidden="true">×</span></button>`).join('')
     || '<p class="ed-none">No reminders</p>';
 }
+function setEndMode(none) {
+  ed.querySelectorAll('#fEndSeg button').forEach(b => b.setAttribute('aria-pressed', (b.dataset.endmode === 'none') === none));
+  $('endLabel').hidden = none;
+  if (!none && !$('fEnd').value && $('fStart').value) $('fEnd').value = fmt(Math.min(24, fromHM($('fStart').value) + 1));
+}
 function setRepeat(v) {
   $('fRepeat').value = v;
   ed.querySelectorAll('#fRepeatSeg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.rep === v));
@@ -3284,7 +3296,7 @@ function openEditor({ kind, id = null, date, s, e, due = '', title = '' }) {
   calPick(item ? item.cal : 'uni');
   if (kind === 'event') {
     const st = item ? item.s : s, en = item ? item.e : e;
-    $('fDate').value = date; $('fStart').value = fmt(st); $('fEnd').value = fmt(en);
+    $('fDate').value = date; $('fStart').value = fmt(st); $('fEnd').value = item && item.open ? '' : fmt(en);
     $('fUntil').value = item ? item.until || '' : '';
     $('fWhere').value = item ? item.where || '' : '';
   } else {
@@ -3300,6 +3312,7 @@ function openEditor({ kind, id = null, date, s, e, due = '', title = '' }) {
     $('fUntil').value = ''; $('fWhere').value = ''; $('fDue').value = due;
   }
   setRepeat(item && kind === 'event' ? item.repeat || 'none' : 'none');
+  setEndMode(!!(item && kind === 'event' && item.open));
   syncDuePills();
   $('fDel').hidden = !id; delMode(false); $('fDel').hidden = !id;
   $('edScroll').scrollTop = 0;
@@ -3325,17 +3338,19 @@ $('edForm').addEventListener('submit', e => {
   if (edit.kind === 'event') {
     const date = $('fDate').value;
     if (!DATE_RE.test(date)) return errShow('Pick a date.', $('fDate'));
-    if (!$('fStart').value || !$('fEnd').value) return errShow('Set a start and an end time.', $('fStart').value ? $('fEnd') : $('fStart'));
-    const s = fromHM($('fStart').value), en0 = fromHM($('fEnd').value), en = en0 === 0 ? 24 : en0;   // an end of 00:00 means midnight
-    if (en <= s) return errShow('This ends before it starts. Move the end later (00:00 means midnight).', $('fEnd'));
+    const open = $('endLabel').hidden;   // "No end" picked: only the start is kept
+    if (!$('fStart').value) return errShow('Set a start time.', $('fStart'));
+    if (!open && !$('fEnd').value) return errShow('Set an end time, or pick No end.', $('fEnd'));
+    const s = fromHM($('fStart').value), en0 = open ? 0 : fromHM($('fEnd').value), en = open ? Math.min(24, s + OPEN_LEN) : en0 === 0 ? 24 : en0;   // an end of 00:00 means midnight
+    if (!open && en <= s) return errShow('This ends before it starts. Move the end later (00:00 means midnight).', $('fEnd'));
     const repeat = $('fRepeat').value, until = repeat === 'weekly' ? $('fUntil').value : '', where = $('fWhere').value.trim();
     const remind = [...ed.querySelectorAll('#fRemind [aria-pressed="true"]')].map(b => +b.dataset.remind);
     const ev = edit.id && db.events.find(x => x.id === edit.id);
     // Editing one occurrence of a series shifts the whole series by the same number of days
     const first = ev ? ymd(addDays(parse(ev.date), diffDays(edit.date, date))) : date;
     if (until && until < first) return errShow('The repeat ends before the first event.', $('fUntil'));
-    if (ev) Object.assign(ev, { title, cal, s, e: en, repeat, until, where, notes, remind, date: first });
-    else db.events.push({ id: uid(), title, cal, date, s, e: en, repeat, until, skip: [], where, notes, remind });
+    if (ev) Object.assign(ev, { title, cal, s, e: en, open, repeat, until, where, notes, remind, date: first });
+    else db.events.push({ id: uid(), title, cal, date, s, e: en, open, repeat, until, skip: [], where, notes, remind });
     cursor = parse(date);
   } else {
     const due = $('fDue').value, t = edit.id && db.tasks.find(x => x.id === edit.id);
@@ -3356,6 +3371,7 @@ ed.addEventListener('click', e => {
   const r = e.target.closest('[data-remind]'); if (r) r.setAttribute('aria-pressed', r.getAttribute('aria-pressed') !== 'true');
   const x = e.target.closest('[data-rm-at]'); if (x) { edit.taskRemind = edit.taskRemind.filter(t => t !== x.dataset.rmAt); renderRemindList(); }
   const rp = e.target.closest('[data-rep]'); if (rp) setRepeat(rp.dataset.rep);
+  const em = e.target.closest('[data-endmode]'); if (em) setEndMode(em.dataset.endmode === 'none');
   const du = e.target.closest('[data-due]');
   if (du) { const n = { none: null, today: 0, tomorrow: 1, week: 7 }[du.dataset.due]; $('fDue').value = n === null ? '' : ymd(addDays(new Date(), n)); syncDuePills(); }
   if (e.target.closest('#fAddRemind')) {
@@ -3418,7 +3434,7 @@ function spotRowHtml(r, i) {
   let ic, title, meta, kind, c = 'var(--accent)';
   if (r.type === 'event') {
     const e = r.ev; c = `var(--c-${e.cal})`; ic = CAL_ICON[e.cal]; title = esc(e.title); kind = 'Event';
-    meta = `${dayWord(r.date)} · ${fmt(e.s)}–${fmt(e.e)}${e.where ? ' · ' + esc(e.where) : ''}${e.repeat === 'weekly' ? ' · every week' : ''}`;
+    meta = `${dayWord(r.date)} · ${span(e.s, e.e, e.open)}${e.where ? ' · ' + esc(e.where) : ''}${e.repeat === 'weekly' ? ' · every week' : ''}`;
   } else if (r.type === 'task') {
     const x = r.task; c = `var(--c-${x.cal})`; ic = x.done ? 'i-check' : CAL_ICON[x.cal]; title = esc(x.title); kind = x.done ? 'Done' : 'Task';
     meta = `${CALS[x.cal]} · ${x.done ? 'Done' : x.due ? dueInfo(x).text : 'No date'}`;
@@ -3563,7 +3579,7 @@ document.addEventListener('pointermove', e => {
   }
   st.setProperty('--d', drag.e - drag.s);
   const start = drag.el.querySelector('.ev__start'); if (start) start.textContent = fmt(drag.s);
-  const meta = drag.el.querySelector('.ev__meta'); if (meta) meta.textContent = `${fmt(drag.s)}–${fmt(drag.e)} · ${dur(drag.e - drag.s)}`;
+  const meta = drag.el.querySelector('.ev__meta'); if (meta) meta.textContent = drag.ev.open && drag.mode !== 'resize' ? fmt(drag.s) : `${fmt(drag.s)}–${fmt(drag.e)} · ${dur(drag.e - drag.s)}`;
 });
 document.addEventListener('pointerup', () => {
   if (!drag) return;
@@ -3574,8 +3590,9 @@ document.addEventListener('pointerup', () => {
   if (!shift && d.s === d.ev.s && d.e === d.ev.e) { render(); return; }   // dropped where it started
   const snap = JSON.stringify(db), ev = d.ev;
   Object.assign(ev, { s: d.s, e: d.e, date: ymd(addDays(parse(ev.date), shift)) });
+  if (d.mode === 'resize') ev.open = false;
   save(); render();
-  toast(d.mode === 'resize' ? 'Resized' : 'Moved', () => restore(snap), `${ev.title} · ${fmt(d.s)}–${fmt(d.e)}${ev.repeat === 'weekly' ? ' · every week' : ''}`);
+  toast(d.mode === 'resize' ? 'Resized' : 'Moved', () => restore(snap), `${ev.title} · ${span(d.s, d.e, ev.open)}${ev.repeat === 'weekly' ? ' · every week' : ''}`);
 });
 document.addEventListener('pointercancel', () => { if (drag && drag.moved) { drag = null; render(); } else drag = null; });
 

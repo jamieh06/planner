@@ -110,7 +110,7 @@ Deno.serve(async (req) => {
         for (const m of reminds) {
           if (!due(d * 1440 + Math.round(ev.s * 60) - m)) continue;
           if (!(await claim(`${uid}:ev:${ev.id}:${dateOf(d)}:${m}`))) continue;
-          await send(subs, { title: ev.title, body: `${leadText(m, ev, d)} · ${hm(ev.s)}–${hm(ev.e)}${ev.where ? ` · ${ev.where}` : ""}`, tag: `ev-${ev.id}-${dateOf(d)}` });
+          await send(subs, { title: ev.title, body: `${leadText(m, ev, d)} · ${hm(ev.s)}${ev.open === true ? "" : `–${hm(ev.e)}`}${ev.where ? ` · ${ev.where}` : ""}`, tag: `ev-${ev.id}-${dateOf(d)}` });
           sent++;
         }
       }
